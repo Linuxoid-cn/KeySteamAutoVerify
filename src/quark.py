@@ -256,6 +256,11 @@ class Quark:
     def delete_items(self, fids: list[str], log=print) -> bool:
         """删到回收站。目录会连同里面的文件一起删。
 
+        真实接口的约束（实测两次踩坑）：
+          * 字段名是 ``filelist``（不是 ``file_list``）
+          * ``filelist`` 与 ``current_dir_fid`` **不能同时给**，
+            只传 filelist 即可按 fid 删除。
+
         删除失败不让整个流程崩 —— 下一次运行会用新的随机目录名，
         旧残留不会再被撞到。
         """
@@ -264,8 +269,8 @@ class Quark:
             return True
         try:
             d = self._req("POST", "/file/delete", body={
-                "action_type": 2,          # 2 = 删除
-                "file_list": fids,
+                "action_type": 2,              # 2 = 删除
+                "filelist": fids,
                 "exclude_fids": [],
             })
         except QuarkError as e:
@@ -310,9 +315,12 @@ class Quark:
             if "验证码" in name or re.search(r"\bcode\b", low):
                 doomed.append(it["fid"])
                 log(f"[夸克] 清理旧验证码包: {name}")
-        if doomed and self.delete_items(doomed, log):
+        if not doomed:
+            return 0
+        if self.delete_items(doomed, log):
             log(f"[夸克] 已删除 {len(doomed)} 个旧验证码包")
-        return len(doomed)
+            return len(doomed)
+        return 0
 
     # ---------- 高层：找到验证码 zip ----------
     @staticmethod
@@ -391,6 +399,7 @@ class Quark:
             self.clear_legacy_code_files(log)
 
         run_dir: Optional[str] = None
+        parent = "0"
         try:
             # ---- 1. 建一个谁也撞不到的新目录 ----
             if base_folder:
@@ -473,10 +482,10 @@ class Quark:
         want = set(n for n in names if n)
         doomed = [it["fid"] for it in self.list_dir("0")
                   if not it.get("dir") and it.get("file_name") in want]
-        if doomed:
-            self.delete_items(doomed, log)
+        if doomed and self.delete_items(doomed, log):
             log(f"[夸克] 已删除根目录残留 {len(doomed)} 个")
-        return len(doomed)
+            return len(doomed)
+        return 0
 
     def _sweep_runs(self, base_folder: str, keep_fid: Optional[str],
                     log=print) -> int:
@@ -492,4 +501,5 @@ class Quark:
                   and it.get("fid") != keep_fid]
         if doomed and self.delete_items(doomed, log):
             log(f"[夸克] 清掉 {len(doomed)} 个历史临时目录")
-        return len(doomed)
+            return len(doomed)
+        return 0

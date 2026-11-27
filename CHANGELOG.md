@@ -12,6 +12,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### 修复
 
+- **删除接口参数纠错（实测踩了两个坑）**：夸克 `/file/delete` 只认 `filelist`，
+  写成 `file_list` 报 `14001 Bad Parameter: [current_dir_fid,filelist 不能同时为空]`；
+  而 `filelist` 和 `current_dir_fid` 又**不能同时给**，给了报 `[... 不能同时存在值]`。
+  现在固定只传 `{"action_type": 2, "filelist": [...], "exclude_fids": []}`。
+- **清理数量不再谎报**：删除失败时返回 0，不再把"准备删"的数量当成"已删"。
 - **同名旧包导致验证码失效**：每次运行都在 `KeySteam验证码/` 下新建唯一目录
   `run-<时间戳>-<6位随机>`，只把本次的包转存进这个空目录，因此不可能撞到历史文件。
 - **用完即删**：`fetch_code_zip` 的 `finally` 里删除整个临时目录，成功失败都清理，
