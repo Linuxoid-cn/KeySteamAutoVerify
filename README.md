@@ -13,6 +13,24 @@
   · <a href="https://github.com/Linuxoid-cn">github.com/Linuxoid-cn</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Linuxoid-cn/KeySteamAutoVerify/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Linuxoid-cn/KeySteamAutoVerify?label=release&color=2ea043" alt="latest release">
+  </a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-0078d4" alt="platform">
+</p>
+
+## 下载 / Download
+
+**[⬇️ 下载最新版](https://github.com/Linuxoid-cn/KeySteamAutoVerify/releases/latest)**
+（当前 `v1.0.3`，Windows x64，约 80 MB）
+
+解压后**双击 `KeySteamAutoVerify.exe` 即可**，KeySteam 没打开也会自动帮你启动。
+
+- 不想用打包版：见下文「从源码运行」
+- 每个版本的改动：见 [CHANGELOG.md](CHANGELOG.md) 与 [Releases](https://github.com/Linuxoid-cn/KeySteamAutoVerify/releases)
+
 ---
 
 ## 中文文档
