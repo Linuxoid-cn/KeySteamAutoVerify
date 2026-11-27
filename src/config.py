@@ -13,6 +13,10 @@ DEFAULT = {
     "quark_save_dir": "KeySteam验证码",
     # 取到码后自动删掉临时目录 / 旧残留；调试时可设 false 保留现场
     "quark_cleanup": True,
+    # 双击运行时：没开着就自动启动 KeySteam（开着的就直接接管扫二维码）
+    "auto_launch": True,
+    # 自动启动后等窗口出现的最长秒数
+    "launch_wait_seconds": 75,
     "open_browser_on_fail": True,
     "download_watch_seconds": 180,
     "auto_close_keysteam": True,

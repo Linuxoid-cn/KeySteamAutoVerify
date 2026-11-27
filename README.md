@@ -32,6 +32,8 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
 | 环节 | 技术手段 | 说明 |
 |---|---|---|
+| 定位安装位置 | **注册表 / 运行中进程 / 常见目录** | 依次查 `config.json` → 正在运行的 `keysteam.exe` 镜像路径 → 注册表卸载项的 `DisplayIcon`/`InstallLocation`（`HKCU`、`HKLM`、`WOW6432Node` 都扫）→ `App Paths` → `%LOCALAPPDATA%\KeySteam` 等常见目录 → `PATH`。**换台机器、换安装盘都不用改配置**，找到后自动写回 `config.json` |
+| 启动软件 | **开着就接管，没开就自动拉起** | 已运行时直接连上现有窗口（不重启、不动你的状态）；没运行时用上面定位到的 exe 自动启动，等控件树就绪后再继续扫二维码 |
 | 定位界面元素 | **Windows UI Automation** | 按语义找控件（`KeySteam 验证` 窗口 / `验证码分享链接二维码` 图片 / `输入中间 6 位数字` 输入框 / `验证` 按钮），**不依赖坐标或版本号**，程序小改也能命中 |
 | 截取二维码 | **PrintWindow** | 直接让窗口自己渲染位图，被遮挡、失焦都能抓到 |
 | 识别二维码 | OpenCV `QRCodeDetector` | 带多轮增强（放大 / 二值化 / 反色） |
@@ -44,26 +46,31 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
 ### 快速开始
 
-**第一步**：打开 KeySteam，等它弹出「KeySteam 验证」窗口。
+**只有一个动作**：双击 `KeySteamAutoVerify.exe`。
 
-**第二步**：双击 `KeySteamAutoVerify.exe`。
+- KeySteam **没打开** → 自动从注册表找到安装位置、替你启动它，等界面就绪后接着扫二维码
+- KeySteam **已经打开** → 直接接管，马上扫二维码，不重启、不打断你
 
 之后它会自己走完：
 
 ```
 ==========================================================
   KeySteam 验证码助手
+  https://github.com/Linuxoid-cn  ·  by Kernix
 ==========================================================
+  KeySteam 位置：C:\...\KeySteam\keysteam.exe
+  （来源：注册表）
 
-  [2/5] 寻找 KeySteam 验证窗口
-  ✓ 已找到验证弹窗
+  [1/5] 启动 / 接管 KeySteam
+  KeySteam 没有运行 —— 正在自动启动…
+  ✓ 已找到验证弹窗，准备扫描二维码
   二维码位置：368×369
 
-  [3/5] 读取弹窗里的二维码
+  [2/5] 读取弹窗里的二维码
   ✓ 二维码已识别
   ✓ 网盘地址：https://pan.quark.cn/s/xxxxxxxx
 
-  [1/5] 检查夸克登录状态
+  [3/5] 检查夸克登录状态
   ! 还没登录过夸克，需要先登录一次（只需一次）
 
   正在打开浏览器窗口，请在窗口里登录夸克…
@@ -81,6 +88,8 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
   按回车键退出…
 ```
+
+标题是亮青色，**网址青色、作者名洋红**，双击运行时一眼能看到出处。
 
 **你唯一要做的动作**：第一次运行时，在弹出的浏览器窗口里扫码登录夸克。
 登录成功那一刻，程序自动把 cookie 写成同目录的 `cookies.json`。
@@ -114,8 +123,10 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
 | 参数 | 作用 |
 |---|---|
-| 无参数 | 交互向导（双击时走的就是这个） |
+| 无参数 | 交互向导（双击时走的就是这个）：没开就自动启动，开着就直接扫二维码 |
 | `--probe` | 只看界面结构，排错用 |
+| `--restart` | 先关掉再重新启动 KeySteam |
+| `--no-launch` | 没开也不要自动启动，只接管已运行的实例 |
 | `--qr-only` | 只读二维码 |
 | `--resolve-only` | 只解析到网盘链接 |
 | `--dry-run` | 拿到验证码但不提交 |
@@ -153,6 +164,8 @@ python -m PyInstaller --onedir --console --name KeySteamAutoVerify ^
 
 - **只支持 Windows**（依赖 UIA、PrintWindow、DPAPI、AV 等）。
 - 必须在**正常桌面会话**里运行。受限沙箱（作业对象）中，子进程可能拿不到完整 UIA 控件树。
+- 自动启动依赖能找到 `keysteam.exe`：注册表里没记录的绿色版/便携版请手动在
+  `config.json` 里把 `keysteam_exe` 写成完整路径；不想自动启动就设 `auto_launch: false` 或用 `--no-launch`。
 - 二维码短链有效期约 **20 分钟**，过期返回 HTTP 410；程序会自动点「重新加载二维码」重试。
 - 网盘里的验证码包同样约 **20 分钟**换一次内容，所以程序每次都用新的临时目录转存、下完即删
   （详见上文），不会拿到上一次的旧包。
@@ -185,6 +198,8 @@ This repo automates the whole thing. **One double-click.**
 
 | Stage | Technique | Notes |
 |---|---|---|
+| Locate the install path | **Registry / running process / common dirs** | `config.json` → image path of a running `keysteam.exe` → registry uninstall entries (`DisplayIcon` / `InstallLocation`, scanning `HKCU`, `HKLM` and `WOW6432Node`) → `App Paths` → `%LOCALAPPDATA%\KeySteam` and friends → `PATH`. **Works on any machine without editing config**; the hit is written back to `config.json` |
+| Launch the app | **Attach if running, launch if not** | Already running → connect to the existing window (no restart, no state change); not running → start the located exe, wait for the control tree, then continue with the QR |
 | Locate UI elements | **Windows UI Automation** | Semantic lookup (window `KeySteam 验证`, image `验证码分享链接二维码`, edit `输入中间 6 位数字`, button `验证`). **No coordinates, no version strings** — survives minor UI changes |
 | Capture the QR | **PrintWindow** | The window renders itself into a bitmap; works even when occluded or unfocused |
 | Decode the QR | OpenCV `QRCodeDetector` | Multiple enhancement passes (upscale / threshold / invert) |
@@ -197,9 +212,10 @@ This repo automates the whole thing. **One double-click.**
 
 ### Quick start
 
-**Step 1** — Open KeySteam and wait for the "KeySteam 验证" window.
+**One action** — double-click `KeySteamAutoVerify.exe`.
 
-**Step 2** — Double-click `KeySteamAutoVerify.exe` and follow the prompts.
+- KeySteam **not running** → the tool finds it via the registry, launches it, waits for the UI, then reads the QR.
+- KeySteam **already running** → it attaches to the live window and goes straight to the QR.
 
 The only manual action ever required is the **first-time Quark login** in the
 browser window the tool opens. The cookie is captured automatically as soon as
@@ -254,6 +270,9 @@ build.bat                     # package
   each run saves into a fresh temp folder and deletes it right after downloading.
 - The resulting ticket is valid for **one day**.
 - Quark sessions expire eventually — re-run the wizard to refresh.
+- Auto-launch needs to find `keysteam.exe`; portable/green builds missing from the
+  registry should be pinned via `keysteam_exe` in `config.json`. Set
+  `auto_launch: false` or pass `--no-launch` to disable launching.
 
 ### Disclaimer
 

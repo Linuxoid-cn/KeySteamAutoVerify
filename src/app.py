@@ -89,24 +89,81 @@ def launch(exe_path: str, log=print) -> subprocess.Popen:
                             stderr=subprocess.DEVNULL)
 
 
+# ------------------------------------------------------------ 没开就自动开
+def ensure_window(exe_path: str = "", timeout: float = 75.0,
+                  auto_launch: bool = True, log=print) -> int:
+    """确保 KeySteam 在运行，并返回它的主窗口句柄。
+
+    * 已经在运行 → 直接接管（不杀掉、不打扰当前状态，接着扫二维码）
+    * 没有运行   → 自动 locate 到的 exe 启动它，等窗口出现后接管
+    """
+    if is_running():
+        log("[进程] KeySteam 已在运行 —— 直接接管，开始扫二维码")
+        return attach(timeout=min(timeout, 30.0), log=log)
+
+    if not auto_launch:
+        raise RuntimeError("KeySteam 没有运行（已用 --no-launch 禁止自动启动）")
+
+    if not exe_path or not os.path.exists(exe_path):
+        raise RuntimeError("找不到 KeySteam 的可执行文件，无法自动启动")
+
+    log("[进程] KeySteam 没有运行 —— 自动启动")
+    proc = launch(exe_path, log)
+
+    # 启动后几秒内进程就没了，通常是被已有实例接管或安装损坏，仍继续等窗口
+    for _ in range(6):
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            log(f"[进程] 启动器已退出（exit={proc.returncode}），继续等窗口…")
+            break
+
+    return attach(timeout=timeout, log=log)
+
+
 # ------------------------------------------------------------------ 连接
 def attach(timeout: float = 45.0, log=print):
-    """等 KeySteam 窗口 + 控件树可用。返回窗口句柄。"""
+    """等 KeySteam 窗口 + 控件树可用。返回窗口句柄。
+
+    刚启动时窗口先出来、控件树还在加载（可能只有 1 个壳控件），
+    所以要等到「能看到验证弹窗 / 二维码」或「控件数足够多」才算可用。
+    """
     deadline = time.time() + timeout
     last = ""
+    seen_hwnd = 0
+    best_total = 0
     while time.time() < deadline:
         hwnd = ui.window_handle()
-        if hwnd:
-            snap = ui.snapshot()
-            if snap.get("total"):
-                log(f"[界面] 已连接（{snap.get('backend')} 后端，"
-                    f"{snap['total']} 个控件）")
-                return hwnd
-            last = "控件树为空"
-        else:
+        if not hwnd:
             last = "窗口未出现"
+            time.sleep(0.8)
+            continue
+        seen_hwnd = hwnd
+        snap = ui.snapshot()
+        total = int(snap.get("total") or 0)
+        best_total = max(best_total, total)
+        if snap.get("gate_visible") or snap.get("qr") or total >= 20:
+            log(f"[界面] 已连接（{snap.get('backend')} 后端，{total} 个控件）")
+            return hwnd
+        last = f"控件树还在加载（{total} 个控件）"
         time.sleep(0.8)
+
+    if seen_hwnd and best_total:
+        log(f"[界面] 等待超时，但已拿到窗口（最多 {best_total} 个控件），继续尝试")
+        return seen_hwnd
     raise RuntimeError(f"等不到 KeySteam 界面（{last}）")
+
+
+def wait_for_gate(timeout: float = 6.0) -> dict:
+    """等验证弹窗出现 —— 程序刚启动时界面可能还没画完。
+
+    返回最后一次快照（调用方看 gate_visible / qr 即可）。
+    """
+    deadline = time.time() + timeout
+    snap = ui.snapshot()
+    while not snap.get("gate_visible") and time.time() < deadline:
+        time.sleep(0.8)
+        snap = ui.snapshot()
+    return snap
 
 
 def bring_to_front(hwnd: int) -> None:

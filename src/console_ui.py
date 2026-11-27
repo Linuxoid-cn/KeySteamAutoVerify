@@ -26,6 +26,10 @@ C_WARN = "\033[93m"
 C_ERR = "\033[91m"
 C_DIM = "\033[90m"
 C_END = "\033[0m"
+# 署名 / 网址用另一种颜色，双击运行时一眼能看到出处
+C_TITLE = "\033[1;96m"      # 标题：亮青 + 加粗
+C_URL = "\033[96m"          # 网址：青色
+C_AUTHOR = "\033[95m"       # 作者：洋红
 
 
 def _enable_ansi() -> None:
@@ -49,8 +53,9 @@ _enable_ansi()
 def banner() -> None:
     print()
     print(C_DIM + "=" * 58 + C_END)
-    print("  KeySteam 验证码助手")
-    print(C_DIM + "  https://github.com/Linuxoid-cn  ·  by Kernix" + C_END)
+    print(f"  {C_TITLE}KeySteam 验证码助手{C_END}")
+    print(f"  {C_URL}https://github.com/Linuxoid-cn{C_END}"
+          f"  ·  by {C_AUTHOR}Kernix{C_END}")
     print(C_DIM + "=" * 58 + C_END)
 
 

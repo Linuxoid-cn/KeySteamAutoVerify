@@ -20,8 +20,9 @@
     写回输入框 → 点「验证」
 
 命令：
-    KeySteamAutoVerify.exe                 完整自动（需先打开 KeySteam）
-    KeySteamAutoVerify.exe --restart       由本工具重启 KeySteam
+    KeySteamAutoVerify.exe                 双击即用：没开就自动启动，开着就直接扫二维码
+    KeySteamAutoVerify.exe --restart       先关掉再重新启动 KeySteam
+    KeySteamAutoVerify.exe --no-launch     只接管已运行的实例，不自动启动
     KeySteamAutoVerify.exe --probe         只看界面结构
     KeySteamAutoVerify.exe --qr-only       只读二维码
     KeySteamAutoVerify.exe --resolve-only  解析到夸克链接
@@ -53,10 +54,10 @@ except Exception:
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from src import (app, browser_login, browser_login_cdp, code_extract,
-                 config, qr, quark, resolver, ui, wizard)
+                 config, locate, qr, quark, resolver, ui, wizard)
 else:
     from . import (app, browser_login, browser_login_cdp, code_extract,
-               config, qr, quark, resolver, ui, wizard)
+               config, locate, qr, quark, resolver, ui, wizard)
 
 
 LOG_FILE = None
@@ -157,21 +158,30 @@ def run(args) -> int:
             log(f"[失败] 清理出错: {e}")
             return 4
 
-    if not os.path.exists(exe):
-        log(f"[错误] 找不到 KeySteam: {exe}")
+    # ---- 定位安装位置：配置 → 运行中进程 → 注册表 → 常见目录 ----
+    exe, how = locate.find(exe, log=log)
+    if not exe:
+        log(f"[错误] {locate.install_hint()}")
         return 2
+    if how != "config" and cfg.get("keysteam_exe") != exe:
+        cfg["keysteam_exe"] = exe
+        config.save(cfg_path, cfg)
+        log(f"[定位] 已写回配置: {exe}")
+    log(f"[定位] KeySteam = {exe}（来源：{locate.describe(how)}）")
 
-    # ---- 启动策略：默认只接管 ----
-    if getattr(args, "restart", False):
+    # ---- 启动策略：开着就接管，没开就自动启动 ----
+    if getattr(args, "restart", False) and app.is_running():
         app.kill_keysteam(log)
-        app.launch(exe, log)
-    elif not app.is_running():
-        log("[提示] KeySteam 当前没有运行。")
-        log("       请先打开 KeySteam，看到「KeySteam 验证」弹窗后再运行本工具；")
-        log("       或加 --restart 让本工具代为启动。")
+    try:
+        hwnd = app.ensure_window(
+            exe,
+            timeout=float(cfg.get("launch_wait_seconds", 75)),
+            auto_launch=not getattr(args, "no_launch", False)
+            and bool(cfg.get("auto_launch", True)),
+            log=log)
+    except RuntimeError as e:
+        log(f"[失败] {e}")
         return 8
-
-    hwnd = app.attach(timeout=45, log=log)
     app.bring_to_front(hwnd)
 
     # ---- 探测 ----
@@ -190,7 +200,7 @@ def run(args) -> int:
         return 0
 
     # ---- 状态 ----
-    snap = ui.snapshot()
+    snap = app.wait_for_gate(6.0)
     log(f"[状态] 弹窗={snap.get('gate_visible')}")
     if not snap.get("gate_visible"):
         log("[完成] 没有验证弹窗 —— 票据仍有效，直接可用。")
@@ -376,6 +386,8 @@ def main() -> int:
     ap.add_argument("--code", default="")
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--restart", action="store_true", help="由本工具重启 KeySteam")
+    ap.add_argument("--no-launch", action="store_true",
+                    help="KeySteam 没开时不要自动启动，只接管已运行的实例")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--log", default="", help="把日志同时写到文件")
     ap.add_argument("--no-auto-cookie", action="store_true",
