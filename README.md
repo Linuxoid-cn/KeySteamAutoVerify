@@ -37,6 +37,7 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 | 识别二维码 | OpenCV `QRCodeDetector` | 带多轮增强（放大 / 二值化 / 反色） |
 | 解析跳板页 | 复刻页面 JS 的 **BigInt-LCG 工作量证明** | `key.steamofl.com/q/<id>` 对桌面 UA 返回 403，需手机 UA；页面内 `x=(x*a+c)%m` 迭代 n 次，答案 POST 回去才吐真实网盘地址 |
 | 读取网盘 | 夸克 Web 端 `drive-pc` 接口 | 分享 token / 目录浏览**匿名可读**；转存和下载需要登录 |
+| 转存取码 | **每次新建唯一临时目录 → 下载 → 立刻删除** | 验证码包约 20 分钟换一次、文件名不变，所以每次转存都进 `KeySteam验证码/run-<时间>-<随机>/`，下完就删，绝不复用上一次的旧包 |
 | 获取登录态 | **独立浏览器 profile + CDP** | 浏览器运行时会独占 cookie 数据库（WinError 32），所以新开一个隔离 profile 并用 DevTools 协议直接取 cookie |
 | 提取验证码 | zipfile / 7-Zip + 正则 + OCR | 从压缩包里扫出「中间 6 位数字」 |
 | 提交 | ValuePattern + InvokePattern | 走和人工一致的路径 |
@@ -70,7 +71,9 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
   下次运行就不用再登录了
 
   [4/5] 从网盘获取今天的验证码
+  ✓ 转存到临时目录 KeySteam验证码/run-20261127-1523-ab12cd
   ✓ 已下载：2026-11-27 验证码.zip（759 字节）
+  ✓ 临时目录已删除，网盘里不会留旧码
   ✓ 验证码：xxxxxx
 
   [5/5] 填入验证码并提交
@@ -84,6 +87,29 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
 > ⚠️ `cookies.json` 里有你的夸克账号凭据，**不要上传、不要分享**。
 
+### 为什么每次都要「新建目录 → 下载 → 删除」
+
+验证码压缩包的内容大约 **20 分钟**刷新一次，但**文件名不变**（永远是 `2026-11-27 验证码.zip` 这种）。
+旧版是直接把包转存到自己网盘根目录，于是第二次运行会这样翻车：
+
+1. 第一次运行 → 根目录出现 `2026-11-27 验证码.zip`（好码）
+2. 20 分钟后官方换了内容，你又运行一次 → 转存撞上**同名旧文件**，
+   网盘里躺着的那份旧包还在，下载回来的仍是 20 分钟前的旧码
+3. 把这个旧码提交上去 → KeySteam 提示「验证码失效」，程序失败
+
+现在的流程：
+
+| 步骤 | 行为 |
+|---|---|
+| 1 | 在 `KeySteam验证码/` 下建**唯一目录** `run-<时间戳>-<6位随机>`（并发、连续运行都撞不上） |
+| 2 | 只把这次的包转进这个新目录 —— 目录是空的，不可能命中历史文件 |
+| 3 | 下载 → 解压 → 提取 6 位码 |
+| 4 | `finally` 里删掉整个临时目录（成功失败都删），网盘回到干净状态 |
+| 5 | 顺手清掉根目录里遗留的 `*验证码*.zip/.rar/.7z`，以及上次崩溃留下的 `run-*` 目录 |
+
+跑完网盘里只会剩一个空的 `KeySteam验证码` 文件夹。
+想留现场调试就加 `--keep-code`；想手动清一次历史残留跑 `--clean-drive`。
+
 ### 命令行参数（可选）
 
 | 参数 | 作用 |
@@ -96,6 +122,8 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 | `--manual` | 浏览器手动下载模式 |
 | `--code 123456` | 直接提交指定验证码 |
 | `--login` | 只做浏览器登录并导出 cookies |
+| `--clean-drive` | 只清理网盘里遗留的旧验证码包，清完退出 |
+| `--keep-code` | 取完码保留网盘临时目录（调试用） |
 | `--keep-browser` | 登录窗口不自动关闭 |
 | `--no-auto-cookie` | 不从浏览器自动导出 cookie |
 | `--log 文件` | 日志同时写文件 |
@@ -126,6 +154,8 @@ python -m PyInstaller --onedir --console --name KeySteamAutoVerify ^
 - **只支持 Windows**（依赖 UIA、PrintWindow、DPAPI、AV 等）。
 - 必须在**正常桌面会话**里运行。受限沙箱（作业对象）中，子进程可能拿不到完整 UIA 控件树。
 - 二维码短链有效期约 **20 分钟**，过期返回 HTTP 410；程序会自动点「重新加载二维码」重试。
+- 网盘里的验证码包同样约 **20 分钟**换一次内容，所以程序每次都用新的临时目录转存、下完即删
+  （详见上文），不会拿到上一次的旧包。
 - 票据有效期是**一天**（KeySteam 官方在验证码文件里说明：二维码有效期 20 分钟，激活后验证有效期一天）。
 - 夸克登录态会随浏览器策略过期，届时重跑一次向导即可自动续上。
 
@@ -160,6 +190,7 @@ This repo automates the whole thing. **One double-click.**
 | Decode the QR | OpenCV `QRCodeDetector` | Multiple enhancement passes (upscale / threshold / invert) |
 | Resolve landing page | Reimplemented **BigInt-LCG proof-of-work** | `key.steamofl.com/q/<id>` returns 403 for desktop UAs; the page runs `x=(x*a+c)%m` n times and expects the hex answer posted back before revealing the real drive URL |
 | Read the drive | Quark `drive-pc` web API | Share token and directory listing are **anonymous**; save-to-drive and download require login |
+| Save & fetch the code | **Fresh temp folder per run → download → delete** | The archive is refreshed roughly every 20 minutes **under the same filename**, so each run saves into `KeySteam验证码/run-<time>-<random>/`, downloads, and removes the folder — never re-using a stale copy |
 | Obtain login state | **Isolated browser profile + CDP** | Chromium locks the cookie DB while running (WinError 32), so a dedicated profile is launched with `--remote-debugging-port` and cookies are read via the DevTools protocol |
 | Extract the code | zipfile / 7-Zip + regex + OCR | Scans the archive for the 6-digit code |
 | Submit | ValuePattern + InvokePattern | Same path a human would take |
@@ -175,6 +206,30 @@ browser window the tool opens. The cookie is captured automatically as soon as
 you finish logging in.
 
 > ⚠️ `cookies.json` contains your Quark credentials. Never commit or share it.
+
+### Why every run uses a brand-new folder
+
+The verification archive is re-generated about every **20 minutes**, but it keeps
+the **same filename**. Saving it straight into the drive root (the old approach)
+breaks on the second run:
+
+1. Run #1 leaves `2026-11-27 验证码.zip` in the root (a good code).
+2. Twenty minutes later the server has new content, but saving again hits the
+   **same-name file already sitting there** — the download returns the stale copy.
+3. Submitting that stale code → KeySteam answers "验证码失效" and the whole run fails.
+
+The current flow:
+
+| Step | Action |
+|---|---|
+| 1 | Create a unique folder `run-<timestamp>-<6 hex>` under `KeySteam验证码/` (parallel or consecutive runs can never collide) |
+| 2 | Save this run's archive **into that empty folder** — no chance of hitting a historical file |
+| 3 | Download → extract → read the 6-digit code |
+| 4 | Delete the whole temp folder in a `finally` block (success or failure) |
+| 5 | Also sweep leftover `*验证码*.zip/.rar/.7z` from older versions and `run-*` folders left by crashes |
+
+After a run the drive only keeps one empty `KeySteam验证码` folder.
+Use `--keep-code` to keep the folder for debugging, `--clean-drive` to purge history once.
 
 ### CLI options
 
@@ -195,6 +250,8 @@ build.bat                     # package
 - **Windows only.**
 - Requires an interactive desktop session (restricted job objects may break UIA).
 - The QR short link expires in ~20 minutes (HTTP 410); the tool refreshes it automatically.
+- The archive on the drive is refreshed about every 20 minutes too, which is why
+  each run saves into a fresh temp folder and deletes it right after downloading.
 - The resulting ticket is valid for **one day**.
 - Quark sessions expire eventually — re-run the wizard to refresh.
 

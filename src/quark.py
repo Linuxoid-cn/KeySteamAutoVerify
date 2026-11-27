@@ -13,11 +13,26 @@ KeySteam 的分享结构（实测）：
             ├── KeySteam永久免费，如果是付费获得的本软件...
             ├── KeySteam_3.3.2_x64-setup.exe
             └── 2026-11-27 验证码.zip   <- 要的就是这个（约 759 B）
+
+关于"每次都要拿到新文件"（重要）：
+    验证码压缩包大约 **20 分钟** 就换一次内容，但**文件名不变**。
+    老的实现是每次把压缩包转存到自己网盘根目录 —— 第二次转存时，
+    根目录已经躺着上一次那份同名旧文件（旧码），转存任务于是命中
+    "同名文件"，随后下载到的还是旧包 → 提交后提示"验证码失效"。
+
+    现在的做法：
+      1. 每次运行都在 ``KeySteam验证码/`` 下建一个**唯一命名的临时目录**
+         （run-<时间>-<随机>），把分享里的压缩包转存进这个新目录，
+         绝对不会撞上任何历史文件；
+      2. 下载完成后**立刻删掉**这个临时目录（连同里面的压缩包），
+         自己的网盘回到干净状态；
+      3. 顺便扫一遍根目录，把旧版本遗留的 ``*验证码*.zip`` 等残留清掉。
 """
 from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 from typing import Any, Optional
 
@@ -217,6 +232,88 @@ class Quark:
         d = self._req("POST", "/file/download", body={"fids": fids})
         return d.get("data") or []
 
+    # ---------- 目录 / 删除（需登录）----------
+    def mkdir(self, name: str, pdir_fid: str = "0") -> str:
+        """在自己网盘里建一个目录，返回它的 fid。"""
+        d = self._req("POST", "/file", body={
+            "pdir_fid": pdir_fid,
+            "file_name": name,
+            "dir_path": "",
+            "dir_init_lock": False,
+        })
+        fid = (d.get("data") or {}).get("fid")
+        if not fid:
+            raise QuarkError(f"建目录失败: {d}")
+        return fid
+
+    def ensure_folder(self, name: str, pdir_fid: str = "0") -> str:
+        """目录存在就复用，不存在就建。"""
+        for it in self.list_dir(pdir_fid):
+            if it.get("dir") and it.get("file_name") == name:
+                return it["fid"]
+        return self.mkdir(name, pdir_fid)
+
+    def delete_items(self, fids: list[str], log=print) -> bool:
+        """删到回收站。目录会连同里面的文件一起删。
+
+        删除失败不让整个流程崩 —— 下一次运行会用新的随机目录名，
+        旧残留不会再被撞到。
+        """
+        fids = [f for f in fids if f]
+        if not fids:
+            return True
+        try:
+            d = self._req("POST", "/file/delete", body={
+                "action_type": 2,          # 2 = 删除
+                "file_list": fids,
+                "exclude_fids": [],
+            })
+        except QuarkError as e:
+            log(f"[夸克] 清理失败（不影响本次取码）: {e}")
+            return False
+        tid = (d.get("data") or {}).get("task_id")
+        if tid:
+            try:
+                self.wait_task(tid, timeout=60.0)
+            except QuarkError as e:
+                log(f"[夸克] 清理任务异常（不影响本次取码）: {e}")
+                return False
+        return True
+
+    def _delete_tree(self, fid: str, log=print) -> bool:
+        """删目录；直接删目录失败就先把里面的东西删掉再删目录。"""
+        if self.delete_items([fid], log):
+            return True
+        try:
+            kids = [it["fid"] for it in self.list_dir(fid)]
+        except QuarkError:
+            kids = []
+        if kids and self.delete_items(kids, log):
+            return self.delete_items([fid], log)
+        return False
+
+    def clear_legacy_code_files(self, log=print) -> int:
+        """清掉旧版本留在根目录的验证码压缩包（同名撞车就是它造成的）。"""
+        doomed: list[str] = []
+        try:
+            items = self.list_dir("0")
+        except QuarkError as e:
+            log(f"[夸克] 跳过旧文件清理: {e}")
+            return 0
+        for it in items:
+            if it.get("dir"):
+                continue
+            name = it.get("file_name", "")
+            low = name.lower()
+            if not low.endswith((".zip", ".rar", ".7z")):
+                continue
+            if "验证码" in name or re.search(r"\bcode\b", low):
+                doomed.append(it["fid"])
+                log(f"[夸克] 清理旧验证码包: {name}")
+        if doomed and self.delete_items(doomed, log):
+            log(f"[夸克] 已删除 {len(doomed)} 个旧验证码包")
+        return len(doomed)
+
     # ---------- 高层：找到验证码 zip ----------
     @staticmethod
     def _pick_code_zip(items: list[dict]) -> Optional[dict]:
@@ -274,44 +371,125 @@ class Quark:
             "stoken": stoken,
         }
 
-    def fetch_code_zip(self, share_url: str, log=print) -> tuple[str, bytes]:
-        """转存 + 下载验证码压缩包，返回 (文件名, 字节)。"""
+    def fetch_code_zip(self, share_url: str, log=print, *,
+                       base_folder: str = "KeySteam验证码",
+                       cleanup: bool = True,
+                       keep_copy: bool = False) -> tuple[str, bytes]:
+        """转存 + 下载验证码压缩包，返回 (文件名, 字节)。
+
+        每次运行都用**全新临时目录**，拿到即删：
+        验证码约 20 分钟换一次、文件名却不变，旧的"转存到根目录"做法
+        第二次会命中上一次那份旧包 → 提交必然提示"验证码失效"。
+        """
         if not self.logged_in:
             raise QuarkError("下载验证码需要登录夸克，请提供 cookies.json")
 
         info = self.find_code_zip(share_url, log)
         log(f"[夸克] 目标: {info['name']} ({info['size']} B)")
 
-        # 转存到根目录
-        tid = self.save_share(info["pwd_id"], info["stoken"],
-                              info["fid"], info["token"], to_pdir_fid="0")
-        log(f"[夸克] 转存任务 {tid}，等待…")
-        self.wait_task(tid)
-        log("[夸克] 转存完成")
+        if cleanup:
+            self.clear_legacy_code_files(log)
 
-        # 在根目录找它
-        target = None
-        for _ in range(10):
-            files = self.list_dir("0")
-            for f in files:
-                if f.get("file_name") == info["name"]:
-                    target = f
-                    break
-            if target:
-                break
+        run_dir: Optional[str] = None
+        try:
+            # ---- 1. 建一个谁也撞不到的新目录 ----
+            if base_folder:
+                parent = self.ensure_folder(base_folder)
+                run_name = "run-%s-%s" % (time.strftime("%Y%m%d-%H%M%S"),
+                                          secrets.token_hex(3))
+                run_dir = self.mkdir(run_name, parent)
+                log(f"[夸克] 本次转存目录: {base_folder}/{run_name}")
+                dest = run_dir
+            else:
+                log("[夸克] 直接在根目录转存（不做隔离）")
+                dest = "0"
+
+            # ---- 2. 转存到这个新目录 ----
+            tid = self.save_share(info["pwd_id"], info["stoken"],
+                                  info["fid"], info["token"],
+                                  to_pdir_fid=dest)
+            log(f"[夸克] 转存任务 {tid}，等待…")
+            self.wait_task(tid)
+            log("[夸克] 转存完成（拿到的是刚转存的这一份，不是旧包）")
+
+            target = self._locate_saved(info, dest, log)
+            name, blob = self._download(target, log)
+            return name, blob
+        finally:
+            # ---- 3. 无论成功失败，都把这个临时目录删掉 ----
+            if cleanup and not keep_copy:
+                if run_dir:
+                    if self._delete_tree(run_dir, log):
+                        log("[夸克] 临时目录已删除，网盘里不会留旧码")
+                else:
+                    self._delete_by_names([info["name"]], log)
+                if base_folder:
+                    self._sweep_runs(base_folder, run_dir, log)
+
+    # ---------- 内部小工具 ----------
+    def _locate_saved(self, info: dict, pdir_fid: str, log=print) -> dict:
+        """在转存目标目录里找到刚存进去的那个包。"""
+        name = info.get("name")
+        fallback: list[dict] = []
+        for _ in range(12):
+            try:
+                items = [f for f in self.list_dir(pdir_fid) if not f.get("dir")]
+            except QuarkError:
+                items = []
+            for f in items:
+                if name and f.get("file_name") == name:
+                    return f
+            if items:
+                fallback = items
             time.sleep(1.0)
-        if not target:
-            raise QuarkError("转存后在自己网盘里找不到该文件")
 
+        zips = [f for f in fallback
+                if f.get("file_name", "").lower().endswith((".zip", ".rar", ".7z"))]
+        if zips:
+            zips.sort(key=lambda x: int(x.get("updated_at") or x.get("ctime") or 0),
+                      reverse=True)
+            log(f"[夸克] 文件名没对上，改用目录里最新的包: {zips[0].get('file_name')}")
+            return zips[0]
+        raise QuarkError("转存后在自己的网盘里找不到该文件")
+
+    def _download(self, target: dict, log=print) -> tuple[str, bytes]:
         urls = self.download_urls([target["fid"]])
         if not urls:
             raise QuarkError("拿不到下载直链")
         url = urls[0].get("download_url")
         if not url:
             raise QuarkError(f"下载直链为空: {urls[0]}")
-
         log("[夸克] 开始下载…")
         r = self.s.get(url, timeout=180)
         r.raise_for_status()
-        log(f"[夸克] 下载完成 {len(r.content)} B")
-        return info["name"], r.content
+        blob = r.content or b""
+        if not blob:
+            raise QuarkError("下载到的文件是空的")
+        log(f"[夸克] 下载完成 {len(blob)} B")
+        return target.get("file_name") or "code.zip", blob
+
+    def _delete_by_names(self, names: list[str], log=print) -> int:
+        """兜底：按文件名在根目录删掉残留（不走临时目录时用）。"""
+        want = set(n for n in names if n)
+        doomed = [it["fid"] for it in self.list_dir("0")
+                  if not it.get("dir") and it.get("file_name") in want]
+        if doomed:
+            self.delete_items(doomed, log)
+            log(f"[夸克] 已删除根目录残留 {len(doomed)} 个")
+        return len(doomed)
+
+    def _sweep_runs(self, base_folder: str, keep_fid: Optional[str],
+                    log=print) -> int:
+        """清掉上次崩溃/中断留下的 run-* 临时目录。"""
+        try:
+            parent = self.ensure_folder(base_folder)
+            items = self.list_dir(parent)
+        except QuarkError:
+            return 0
+        doomed = [it["fid"] for it in items
+                  if it.get("dir")
+                  and str(it.get("file_name", "")).startswith("run-")
+                  and it.get("fid") != keep_fid]
+        if doomed and self.delete_items(doomed, log):
+            log(f"[夸克] 清掉 {len(doomed)} 个历史临时目录")
+        return len(doomed)

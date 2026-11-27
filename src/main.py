@@ -28,6 +28,11 @@
     KeySteamAutoVerify.exe --dry-run       拿码但不提交
     KeySteamAutoVerify.exe --manual        浏览器手动下载
     KeySteamAutoVerify.exe --code 123456   直接提交指定码
+    KeySteamAutoVerify.exe --clean-drive   清掉网盘里遗留的旧验证码包
+
+验证码文件约 20 分钟换一次、文件名却不变，所以取码策略是
+「每次新建唯一临时目录转存 → 下载 → 立刻删除该目录」，
+保证拿到的永远是刚转存的那份，而不是上一次的旧包（旧包必然提示失效）。
 """
 from __future__ import annotations
 
@@ -134,6 +139,23 @@ def run(args) -> int:
             return 0
         log("[失败] 没有拿到 cookies")
         return 3
+
+    # ---- 只做"清理网盘里的旧验证码残留" ----
+    if getattr(args, "clean_drive", False):
+        if not os.path.exists(cookies_path):
+            log(f"[cookies] 找不到 {cookies_path}，先登录一次（--login）")
+            return 3
+        try:
+            qc = quark.Quark(quark.load_cookies(cookies_path))
+            n = qc.clear_legacy_code_files(log)
+            base = cfg.get("quark_save_dir") or ""
+            if base:
+                qc._sweep_runs(base, None, log)
+            log(f"[完成] 清理了 {n} 个旧验证码包")
+            return 0
+        except quark.QuarkError as e:
+            log(f"[失败] 清理出错: {e}")
+            return 4
 
     if not os.path.exists(exe):
         log(f"[错误] 找不到 KeySteam: {exe}")
@@ -253,7 +275,11 @@ def run(args) -> int:
                 for k in ("kps", "puus", "p_uid", "b-user-id", "sid"):
                     log(f"   {k}: {'有' if k in cs else '无'}")
                 qc = quark.Quark(cs)
-                fname, blob = qc.fetch_code_zip(share_url, log)
+                fname, blob = qc.fetch_code_zip(
+                    share_url, log,
+                    base_folder=cfg.get("quark_save_dir") or "",
+                    cleanup=bool(cfg.get("quark_cleanup", True)),
+                    keep_copy=getattr(args, "keep_code", False))
                 info = code_extract.extract_codes(fname, blob, log)
                 code = code_extract.pick_code(info)
                 log(f"[提取] 6位={info['six'][:5]} 完整={info['full'][:3]}")
@@ -358,6 +384,10 @@ def main() -> int:
                     help="登录用的浏览器窗口不自动关闭")
     ap.add_argument("--login", action="store_true",
                     help="只做浏览器登录并导出 cookies，不继续验证流程")
+    ap.add_argument("--keep-code", action="store_true",
+                    help="取完码后保留网盘里的临时目录（仅调试用）")
+    ap.add_argument("--clean-drive", action="store_true",
+                    help="只清理网盘里遗留的旧验证码包，然后退出")
     # 双击运行（没有任何命令行参数）-> 直接进交互向导，不需要用户敲命令
     if len(sys.argv) <= 1:
         try:

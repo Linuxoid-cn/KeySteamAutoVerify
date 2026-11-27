@@ -147,8 +147,12 @@ def get_code(share_url: str, cookies_path: str, cfg: dict) -> str:
     cs = quark.load_cookies(cookies_path)
     qc = quark.Quark(cs)
 
+    # 每次运行都建唯一临时目录，取到码后立刻删 —— 免得撞上 20 分钟前的旧包
+    fetch = dict(base_folder=cfg.get("quark_save_dir") or "",
+                 cleanup=bool(cfg.get("quark_cleanup", True)))
+
     try:
-        fname, blob = qc.fetch_code_zip(share_url, lambda m: None)
+        fname, blob = qc.fetch_code_zip(share_url, lambda m: None, **fetch)
     except quark.QuarkError as e:
         msg = str(e)
         cui.err(f"下载失败：{msg}")
@@ -161,7 +165,7 @@ def get_code(share_url: str, cookies_path: str, cfg: dict) -> str:
                 progress=_login_progress)
             if got:
                 qc = quark.Quark(got)
-                fname, blob = qc.fetch_code_zip(share_url, lambda m: None)
+                fname, blob = qc.fetch_code_zip(share_url, lambda m: None, **fetch)
             else:
                 return ""
         else:
