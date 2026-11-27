@@ -1,0 +1,30 @@
+# 忽略敏感与构建产物
+cookies.json
+config.json
+*.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 构建
+build/
+build_dir/
+dist/
+dist_dir/
+*.spec
+comtypes_cache/
+
+# 运行期
+runs/
+*.log
+_*.py
+@AutomationLog.txt
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
