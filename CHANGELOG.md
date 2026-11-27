@@ -5,6 +5,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.3] - 2026-11-27
+
+登录用的浏览器改成跟随系统默认。
+
+### 变更
+
+- **原来**：硬编码顺序 Chrome → Edge → 夸克浏览器。系统默认是 Edge 的机器，
+  第一次登录也会弹 Chrome 出来，看着不像"我的浏览器"。
+- **现在**：新增 `browser_login_cdp.default_browser()`，读
+  `HKCU\...\UrlAssociations\http\UserChoice` 得到默认浏览器的 ProgId，
+  再解析它的 `shell\open\command` 拿 exe（读不到就按 ProgId 映射到已知安装目录）。
+  默认浏览器是 Chromium 系（Edge / Chrome / Brave / 夸克 / Vivaldi…）就优先用它，
+  否则回退 Chrome → Edge。
+- 新增配置项 `browser_preference`：`auto`（默认，跟随系统）/ `chrome` / `edge` / 具体 exe 路径。
+- 启动日志会先说明默认浏览器是谁、支不支持 CDP，再说明实际用的是哪一个。
+
+> 仍然使用**独立 profile**（`%TEMP%\ksav\profile`），不读也不动日常浏览器的数据；
+> `--manual` 手动下载模式本来就是用系统默认浏览器打开分享页，未改动。
+
+实测：本机默认 = `msedge`（`MSEdgeHTM`），`auto` 下实际拉起 `msedge` 并成功通过 CDP 拿到 30 个 cookie。
+
+### 修复
+
+- **启动 KeySteam 时不再让它依赖我们的打包目录**：打包版直接 `Popen` 拉起 KeySteam 时，
+  KeySteam 会把 `VCRUNTIME140.dll` 解析到本工具的 `_internal` 里。后果是
+  KeySteam 悄悄依赖我们的文件夹（我们一删它就跑不起来），且运行时锁死这些 dll，
+  导致本工具无法覆盖更新（实测 `Remove-Item` 报 Access denied）。
+  现在改为经 `explorer.exe` 间接启动，DLL 解析回到 `C:\Windows\System32`；
+  `_clean_env()` 同时把自身目录从子进程 PATH 里摘掉，直接执行时才走兜底路径。
+
+---
+
 ## [1.0.2] - 2026-11-27
 
 双击就干活：自己找到 KeySteam、没开就自己开、开着就直接扫二维码。

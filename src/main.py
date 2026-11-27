@@ -134,7 +134,8 @@ def run(args) -> int:
             cookies_path, url=browser_login.QUARK_HOME,
             timeout=float(cfg.get("login_wait_seconds", 300)),
             keep_open=getattr(args, "keep_browser", False),
-            log=log)
+            log=log,
+            preferred=cfg.get("browser_preference", "auto"))
         if got:
             log(f"[完成] cookies 已保存到 {cookies_path}")
             return 0
@@ -271,7 +272,8 @@ def run(args) -> int:
                         url=share_url or browser_login.QUARK_HOME,
                         timeout=float(cfg.get("login_wait_seconds", 240)),
                         keep_open=getattr(args, "keep_browser", False),
-                        log=log)
+                        log=log,
+                        preferred=cfg.get("browser_preference", "auto"))
             if not got:
                 log("[cookies] 没拿到 cookies，改用浏览器手动下载模式")
                 if cfg.get("open_browser_on_fail", True):

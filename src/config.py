@@ -17,6 +17,8 @@ DEFAULT = {
     "auto_launch": True,
     # 自动启动后等窗口出现的最长秒数
     "launch_wait_seconds": 75,
+    # 登录时用哪个浏览器：auto=系统默认（仅 Chromium 系），也可 chrome / edge / 具体 exe 路径
+    "browser_preference": "auto",
     "open_browser_on_fail": True,
     "download_watch_seconds": 180,
     "auto_close_keysteam": True,

@@ -96,6 +96,21 @@ KeySteam 每次打开会弹一个「KeySteam 验证」窗口，要求你：
 
 > ⚠️ `cookies.json` 里有你的夸克账号凭据，**不要上传、不要分享**。
 
+### 用哪个浏览器登录？
+
+第一次登录取 cookie 时会开一个浏览器窗口，选哪个由 `config.json` 的 `browser_preference` 决定：
+
+| 值 | 行为 |
+|---|---|
+| `auto`（默认） | **优先系统默认浏览器**（Edge / Chrome / Brave / 夸克浏览器都行）；若默认浏览器不是 Chromium 系（如 Firefox），自动回退 Chrome → Edge |
+| `chrome` / `edge` | 指定那一款优先 |
+| `C:\...\xxx.exe` | 直接用这个具体路径 |
+
+两个要点：
+
+- 登录用的是**独立 profile**（`%TEMP%\ksav\profile`），不读也不动你日常浏览器的数据，登录后窗口自动关闭。
+- 只有 `--manual`（浏览器手动下载验证码）这一条路径是用**系统默认浏览器**打开分享页的。
+
 ### 为什么每次都要「新建目录 → 下载 → 删除」
 
 验证码压缩包的内容大约 **20 分钟**刷新一次，但**文件名不变**（永远是 `2026-11-27 验证码.zip` 这种）。
@@ -206,7 +221,7 @@ This repo automates the whole thing. **One double-click.**
 | Resolve landing page | Reimplemented **BigInt-LCG proof-of-work** | `key.steamofl.com/q/<id>` returns 403 for desktop UAs; the page runs `x=(x*a+c)%m` n times and expects the hex answer posted back before revealing the real drive URL |
 | Read the drive | Quark `drive-pc` web API | Share token and directory listing are **anonymous**; save-to-drive and download require login |
 | Save & fetch the code | **Fresh temp folder per run → download → delete** | The archive is refreshed roughly every 20 minutes **under the same filename**, so each run saves into `KeySteam验证码/run-<time>-<random>/`, downloads, and removes the folder — never re-using a stale copy |
-| Obtain login state | **Isolated browser profile + CDP** | Chromium locks the cookie DB while running (WinError 32), so a dedicated profile is launched with `--remote-debugging-port` and cookies are read via the DevTools protocol |
+| Obtain login state | **Isolated browser profile + CDP** | Chromium locks the cookie DB while running (WinError 32), so a dedicated profile is launched with `--remote-debugging-port` and cookies are read via the DevTools protocol. The browser itself is chosen by `browser_preference` (`auto` = your default browser when it is Chromium-based, else Chrome → Edge) |
 | Extract the code | zipfile / 7-Zip + regex + OCR | Scans the archive for the 6-digit code |
 | Submit | ValuePattern + InvokePattern | Same path a human would take |
 

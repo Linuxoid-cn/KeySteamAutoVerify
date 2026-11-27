@@ -56,6 +56,7 @@ def ensure_cookies(cookies_path: str, share_url: str, cfg: dict) -> bool:
         keep_open=False,
         log=lambda m: None,          # 向导自己打进度，屏蔽内部日志
         progress=_login_progress,
+        preferred=cfg.get("browser_preference", "auto"),
     )
     if got:
         cui.ok(f"登录成功，已保存 {os.path.basename(cookies_path)}（{len(got)} 项）")
@@ -174,7 +175,8 @@ def get_code(share_url: str, cookies_path: str, cfg: dict) -> str:
                 cookies_path, url="https://pan.quark.cn/",
                 timeout=float(cfg.get("login_wait_seconds", 300)),
                 keep_open=False, log=lambda m: None,
-                progress=_login_progress)
+                progress=_login_progress,
+                preferred=cfg.get("browser_preference", "auto"))
             if got:
                 qc = quark.Quark(got)
                 fname, blob = qc.fetch_code_zip(share_url, lambda m: None, **fetch)

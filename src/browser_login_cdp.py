@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -36,8 +37,115 @@ class CookieError(RuntimeError):
 
 
 # ------------------------------------------------------------------ 浏览器
-def _candidates() -> list[tuple[str, str]]:
-    """返回 [(名字, 可执行文件路径)]。"""
+# 只有 Chromium 系才支持 CDP（--remote-debugging-port）
+CHROMIUM_EXES = {
+    "chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe",
+    "chromium.exe", "quark.exe", "quarkbrowser.exe", "360se.exe",
+    "360chrome.exe", "qqbrowser.exe", "sogouexplorer.exe",
+}
+
+# ProgId 兜底映射（注册表读不到 command 时用）
+_PROGID_HINTS = {
+    "chromehtml": "chrome.exe",
+    "microsoftedgehtm": "msedge.exe",
+    "msedgehtm": "msedge.exe",
+    "firefoxurl": "firefox.exe",
+    "bravehtml": "brave.exe",
+    "vivaldi": "vivaldi.exe",
+    "operastable": "opera.exe",
+}
+
+# 常见安装位置（按 exe 名找）
+_EXE_DIRS = (
+    r"C:\Program Files\Google\Chrome\Application",
+    r"C:\Program Files (x86)\Google\Chrome\Application",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application",
+    r"C:\Program Files\Microsoft\Edge\Application",
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application",
+    r"C:\Program Files\Quark",
+    r"C:\Program Files (x86)\Quark",
+    r"C:\Program Files\Vivaldi\Application",
+)
+
+
+def _find_exe_by_name(exe_name: str) -> str:
+    """按 exe 文件名在常见安装目录里找。"""
+    low = exe_name.lower()
+    for d in _EXE_DIRS:
+        cand = os.path.join(d, exe_name)
+        if os.path.isfile(cand):
+            return cand
+        if os.path.isdir(d):
+            try:
+                for f in os.listdir(d):
+                    if f.lower() == low and os.path.isfile(os.path.join(d, f)):
+                        return os.path.join(d, f)
+            except OSError:
+                pass
+    return ""
+
+
+def default_browser() -> tuple[str, str]:
+    """读系统默认浏览器（http 关联），返回 (名字, exe)。
+
+    不是 Chromium 系（例如 Firefox）时，调用方仍会回退到 Chrome/Edge。
+    """
+    if sys.platform != "win32":
+        return "", ""
+    try:
+        import winreg
+    except Exception:
+        return "", ""
+
+    progid = ""
+    try:
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\Shell\Associations"
+                r"\UrlAssociations\http\UserChoice") as k:
+            progid = str(winreg.QueryValueEx(k, "ProgId")[0] or "")
+    except OSError:
+        pass
+    if not progid:
+        return "", ""
+
+    # 1) 直接用 ProgId 的 open command 解析 exe
+    exe = ""
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, rf"Software\Classes\{progid}\shell\open\command") as k:
+                cmd = str(winreg.QueryValueEx(k, "")[0] or "")
+        except OSError:
+            continue
+        if cmd:
+            raw = cmd.strip()
+            if raw.startswith('"'):
+                exe = raw[1:raw.find('"', 1)]
+            else:
+                exe = raw.split(" ")[0]
+            exe = os.path.expandvars(exe)
+            break
+
+    name = os.path.splitext(os.path.basename(exe))[0] or progid
+    if exe and os.path.isfile(exe):
+        return name, exe
+
+    # 2) 兜底：ProgId → 已知 exe 名 → 常见目录
+    low = progid.lower()
+    for key, exe_name in _PROGID_HINTS.items():
+        if key in low:
+            p = _find_exe_by_name(exe_name)
+            if p:
+                return os.path.splitext(exe_name)[0], p
+    return "", ""
+
+
+def is_chromium_like(exe: str) -> bool:
+    return os.path.basename(exe or "").lower() in CHROMIUM_EXES
+
+
+def _known_candidates() -> list[tuple[str, str]]:
+    """硬编码可用的 Chromium 浏览器（Chrome → Edge → 夸克）。"""
     out = []
     for name, paths in (
         ("Chrome", [r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -59,6 +167,43 @@ def _candidates() -> list[tuple[str, str]]:
                         if f.lower() in ("quark.exe", "quarkbrowser.exe"):
                             out.append(("Quark", os.path.join(root, f)))
                             break
+    return out
+
+
+def _candidates(preferred: str = "auto") -> list[tuple[str, str]]:
+    """返回 [(名字, 可执行文件路径)]，决定用哪个浏览器登录。
+
+    preferred:
+        "auto" / "default"  优先系统默认浏览器（仅当它是 Chromium 系），否则 Chrome → Edge
+        "chrome" / "edge"   指定那一款优先
+        绝对路径             直接用这个 exe
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, exe: str) -> None:
+        if exe and os.path.isfile(exe) and exe.lower() not in seen:
+            seen.add(exe.lower())
+            out.append((name, exe))
+
+    pref = (preferred or "auto").strip()
+    low = pref.lower()
+
+    if pref and os.path.isfile(pref):
+        add(os.path.splitext(os.path.basename(pref))[0], pref)
+        return out
+
+    if low in ("chrome", "edge", "quark"):
+        for n, e in _known_candidates():
+            if n.lower() == low:
+                add(n, e)
+    elif low in ("", "auto", "default"):
+        name, exe = default_browser()
+        if exe and is_chromium_like(exe):
+            add(name or "系统默认浏览器", exe)
+
+    for n, e in _known_candidates():
+        add(n, e)
     return out
 
 
@@ -134,11 +279,21 @@ def login_and_capture(cookies_path: str,
                       port: int = 9333,
                       keep_open: bool = False,
                       log=print,
-                      progress=None) -> dict | None:
-    """开独立 profile 的浏览器 → 用户登录 → CDP 导出 cookie → 存盘。"""
-    cands = _candidates()
+                      progress=None,
+                      preferred: str = "auto") -> dict | None:
+    """开独立 profile 的浏览器 → 用户登录 → CDP 导出 cookie → 存盘。
+
+    preferred 决定用哪个浏览器（默认 auto = 系统默认浏览器优先）。
+    """
+    dname, dexe = default_browser()
+    if dexe:
+        usable = is_chromium_like(dexe)
+        log(f"[浏览器] 系统默认浏览器 = {dname}（"
+            f"{'支持 CDP，优先使用' if usable else '不支持 CDP，将回退 Chrome/Edge'}）")
+
+    cands = _candidates(preferred)
     if not cands:
-        raise CookieError("没找到 Chrome/Edge 浏览器")
+        raise CookieError("没找到 Chrome/Edge 浏览器（CDP 只支持 Chromium 系）")
 
     profile = _profile_dir()
     # 清掉上次的残留锁

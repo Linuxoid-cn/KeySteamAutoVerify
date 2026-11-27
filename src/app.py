@@ -72,15 +72,59 @@ def _clean_env() -> dict:
               "_PYI_PARENT_PROCESS_LEVEL", "_PYI_SPLASH_IPC",
               "PYTHONHOME", "PYTHONPATH"):
         env.pop(k, None)
+
+    # 把「我们自己」的目录从 PATH 里摘掉。
+    # 否则被拉起的 KeySteam 可能从打包目录 _internal 里解析 VCRUNTIME140.dll：
+    # 一是让 KeySteam 悄悄依赖我们的文件夹（删了就崩），
+    # 二是运行时锁住这些 dll，导致本工具无法自我更新/覆盖。
+    dirty = set()
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        parts = env.get("PATH", "").split(os.pathsep)
-        env["PATH"] = os.pathsep.join(
-            [p for p in parts if p and os.path.normcase(p) != os.path.normcase(meipass)])
+        dirty.add(os.path.normcase(os.path.abspath(meipass)))
+    if getattr(sys, "frozen", False):
+        dirty.add(os.path.normcase(os.path.dirname(os.path.abspath(sys.executable))))
+        dirty.add(os.path.normcase(os.path.join(
+            os.path.dirname(os.path.abspath(sys.executable)), "_internal")))
+    else:
+        dirty.add(os.path.normcase(os.path.dirname(os.path.abspath(__file__))))
+
+    parts = env.get("PATH", "").split(os.pathsep)
+    keep = []
+    for p in parts:
+        if not p:
+            continue
+        try:
+            norm = os.path.normcase(os.path.abspath(p))
+        except Exception:
+            keep.append(p)
+            continue
+        if any(norm == d or norm.startswith(d + os.sep) for d in dirty):
+            continue
+        keep.append(p)
+    env["PATH"] = os.pathsep.join(keep)
     return env
 
 
-def launch(exe_path: str, log=print) -> subprocess.Popen:
+def launch(exe_path: str, log=print):
+    """启动 KeySteam。
+
+    注意：优先用 explorer 间接启动，而不是直接 Popen。
+    实测（打包后的 onedir 版本）直接拉起时，KeySteam 会把
+    ``VCRUNTIME140.dll`` 解析到我们自己的 ``_internal`` 目录里 ——
+    后果有两个：KeySteam 悄悄依赖我们的文件夹（我们一删它就跑不起来），
+    以及运行时锁住这些 dll，导致本工具无法覆盖更新。
+    交给 explorer 当父进程后，DLL 解析回到 ``C:\\Windows\\System32``。
+    """
+    if sys.platform == "win32" and os.name == "nt":
+        try:
+            log(f"[启动] {exe_path}（经 explorer，避免依赖我们的 _internal）")
+            subprocess.Popen(["explorer.exe", exe_path], close_fds=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return True
+        except Exception as e:
+            log(f"[启动] explorer 方式失败，改用直接执行: {e}")
+
     log(f"[启动] {exe_path}")
     return subprocess.Popen([exe_path],
                             cwd=os.path.dirname(exe_path) or None,
@@ -110,12 +154,13 @@ def ensure_window(exe_path: str = "", timeout: float = 75.0,
     log("[进程] KeySteam 没有运行 —— 自动启动")
     proc = launch(exe_path, log)
 
-    # 启动后几秒内进程就没了，通常是被已有实例接管或安装损坏，仍继续等窗口
-    for _ in range(6):
-        time.sleep(0.5)
-        if proc.poll() is not None:
-            log(f"[进程] 启动器已退出（exit={proc.returncode}），继续等窗口…")
-            break
+    # 直接执行时能拿到 Popen；explorer 方式返回 True，跳过探测
+    if hasattr(proc, "poll"):
+        for _ in range(6):
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                log(f"[进程] 启动器已退出（exit={proc.returncode}），继续等窗口…")
+                break
 
     return attach(timeout=timeout, log=log)
 
